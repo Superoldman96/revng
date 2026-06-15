@@ -30,6 +30,9 @@ void TypeDefinitionEmitter::emitTypeKeyword(clift::DefinedType Type) {
 }
 
 void TypeDefinitionEmitter::emitDeclarationTypedef(clift::DefinedType Type) {
+  auto Guard = Tokens.enterRegion(ptml::CTokenEmitter::RegionKind::Commentable,
+                                  Type.getHandle());
+
   Tokens.emitKeyword(ptml::CTokenEmitter::Keyword::Typedef);
   Tokens.emitSpace();
 
@@ -120,8 +123,9 @@ static std::string paddingFieldName(uint64_t CurrentOffset) {
   //       We should fix this after the configuration is separate from the
   //       model
 
-  model::CNameBuilder Builder(model::Binary{});
-  return Builder.paddingFieldName(CurrentOffset);
+  model::Binary EmptyBinary{};
+  model::CNameBuilder UnconfiguredNB(EmptyBinary);
+  return UnconfiguredNB.paddingFieldName(CurrentOffset);
 }
 
 void TypeDefinitionEmitter::emitPaddingField(clift::ClassType Class,
@@ -204,7 +208,8 @@ void TypeDefinitionEmitter::emitClassDefinition(clift::ClassType Class) {
         //
         // TODO: fix this once the configuration is obtained from the pipe
         //       (new pipeline only).
-        model::CNameBuilder UnconfiguredNB(model::Binary{});
+        model::Binary EmptyBinary{};
+        model::CNameBuilder UnconfiguredNB(EmptyBinary);
         model::StructDefinition FakeStruct; // No model fields are read here.
         model::StructField FakeField(Field.getOffset()); // Only `Offset` read.
         if (not UnconfiguredNB.isAutomaticName(FakeStruct,
@@ -224,6 +229,15 @@ void TypeDefinitionEmitter::emitClassDefinition(clift::ClassType Class) {
       PreviousOffset = Field.getOffset()
                        + clift::getObjectSize(Field.getType());
     }
+
+    // Since the all types are packed, without the trailing padding any struct
+    // whose size extends past the end of its last field would end up with
+    // a wrong `sizeof`.
+    // Print the trailing padding unless `ExplicitPadding` is set to off, in
+    // which case users are explicitly opting out of semantic equivalence
+    // anyway, so breaking `sizeof` is expected.
+    if (IsStruct and Configuration.ExplicitPadding)
+      emitPaddingField(Class, PreviousOffset, Class.getObjectSize());
   }
 
   Tokens.emitPunctuator(ptml::CTokenEmitter::Punctuator::Semicolon);
@@ -238,7 +252,7 @@ void TypeDefinitionEmitter::emitEnumDefinition(clift::EnumType Enum) {
     emitDoxygenComment(Enum);
     Tokens.emitKeyword(ptml::CTokenEmitter::Keyword::Enum);
 
-    clift::ValueType Type = Enum.getUnderlyingType();
+    mlir::Type Type = Enum.getUnderlyingType();
     emitCAttributes(clift::CAttributeListBuilder(Enum.getContext())
                       .setOrUpdate<"_ENUM_UNDERLYING">(Type)
                       .setOrUpdate<"_PACKED">()
